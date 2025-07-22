@@ -91,8 +91,7 @@ const Index = () => {
       }
       return prop;
     }));
-    setSelectedProperty(null);
-  };
+  }, []);
 
   const handleEmergencyCall = useCallback((id: number) => {
     setProperties(prev => {
@@ -104,8 +103,7 @@ const Index = () => {
       const others = updated.filter(p => p.id !== id);
       return [emergency, ...others];
     });
-    setSelectedProperty(null);
-  };
+  }, []);
 
   const triggerAlarm = (id: number) => {
     setProperties(prev => prev.map(prop => 
