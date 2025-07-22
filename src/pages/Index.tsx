@@ -1,9 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Input } from '@/components/ui/input';
 import Icon from '@/components/ui/icon';
 
 interface Property {
@@ -15,8 +13,9 @@ interface Property {
 
 const Index = () => {
   const [properties, setProperties] = useState<Property[]>([]);
-  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
-  const [alarmInterval, setAlarmInterval] = useState<NodeJS.Timeout | null>(null);
+  const [searchId, setSearchId] = useState<string>('');
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [view, setView] = useState<'grid' | 'compact'>('compact');
 
   // Инициализация 125 участков
   useEffect(() => {
@@ -43,11 +42,45 @@ const Index = () => {
       });
     }, 5 * 60 * 1000); // 5 минут
 
-    setAlarmInterval(interval);
     return () => clearInterval(interval);
   }, []);
 
-  const handleProtectionToggle = (id: number) => {
+  // Горячие клавиши
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Ctrl + числа для быстрых действий
+      if (e.ctrlKey) {
+        switch (e.key) {
+          case '1':
+            e.preventDefault();
+            toggleSelectedProtection();
+            break;
+          case '2':
+            e.preventDefault();
+            emergencyCallSelected();
+            break;
+          case '3':
+            e.preventDefault();
+            clearSelectedAlarms();
+            break;
+          case 'a':
+            e.preventDefault();
+            selectAll();
+            break;
+        }
+      }
+      // Escape для сброса выделения
+      if (e.key === 'Escape') {
+        setSelectedIds(new Set());
+        setSearchId('');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [selectedIds]);
+
+  const handleProtectionToggle = useCallback((id: number) => {
     setProperties(prev => prev.map(prop => {
       if (prop.id === id) {
         return {
@@ -61,7 +94,7 @@ const Index = () => {
     setSelectedProperty(null);
   };
 
-  const handleEmergencyCall = (id: number) => {
+  const handleEmergencyCall = useCallback((id: number) => {
     setProperties(prev => {
       const updated = prev.map(prop => 
         prop.id === id ? { ...prop, status: 'emergency' as const, lastCheck: new Date().toLocaleString('ru-RU') } : prop
@@ -80,37 +113,41 @@ const Index = () => {
     ));
   };
 
-  const clearAlarm = (id: number) => {
+  const clearAlarm = useCallback((id: number) => {
     setProperties(prev => prev.map(prop => 
       prop.id === id ? { ...prop, status: 'protected' as const, lastCheck: new Date().toLocaleString('ru-RU') } : prop
     ));
   };
 
-  const getStatusBadge = (status: string) => {
+  // Фильтрация и сортировка
+  const filteredProperties = properties
+    .filter(p => searchId ? p.id.toString().includes(searchId) : true)
+    .sort((a, b) => {
+      // Экстренные и тревожные первыми
+      if (a.status === 'emergency' && b.status !== 'emergency') return -1;
+      if (b.status === 'emergency' && a.status !== 'emergency') return 1;
+      if (a.status === 'alarm' && b.status !== 'alarm') return -1;
+      if (b.status === 'alarm' && a.status !== 'alarm') return 1;
+      return a.id - b.id;
+    });
+
+  const getStatusColor = (status: string) => {
     switch (status) {
-      case 'protected':
-        return <Badge className="bg-green-600 text-white hover:bg-green-700">НА ОХРАНЕ</Badge>;
-      case 'unprotected':
-        return <Badge variant="outline" className="border-gray-400 text-gray-600">СНЯТО С ОХРАНЫ</Badge>;
-      case 'emergency':
-        return <Badge className="bg-red-600 text-white animate-pulse">ВЫЕЗД ГБР</Badge>;
-      case 'alarm':
-        return <Badge className="bg-orange-600 text-white animate-pulse">СИГНАЛИЗАЦИЯ</Badge>;
-      default:
-        return <Badge variant="outline">НЕИЗВЕСТНО</Badge>;
+      case 'protected': return 'bg-green-600';
+      case 'unprotected': return 'bg-gray-400';
+      case 'emergency': return 'bg-red-600 animate-pulse';
+      case 'alarm': return 'bg-orange-500 animate-pulse';
+      default: return 'bg-gray-400';
     }
   };
 
-  const getPropertyCardClass = (status: string) => {
+  const getStatusText = (status: string) => {
     switch (status) {
-      case 'emergency':
-        return 'border-red-600 bg-red-50 shadow-lg';
-      case 'alarm':
-        return 'border-orange-500 bg-orange-50 shadow-md';
-      case 'protected':
-        return 'border-green-500 bg-green-50';
-      default:
-        return 'border-gray-200';
+      case 'protected': return 'ОХРАНА';
+      case 'unprotected': return 'СНЯТО';
+      case 'emergency': return 'ВЫЕЗД ГБР';
+      case 'alarm': return 'ТРЕВОГА';
+      default: return 'НЕТ СВЯЗИ';
     }
   };
 
@@ -122,265 +159,155 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 font-['Roboto']">
-      {/* Header */}
-      <header className="bg-[#11E3A8A] text-white shadow-lg">
-        <div className="container mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <Icon name="Shield" size={32} />
-              <h1 className="text-2xl font-bold">Система управления ГБР</h1>
+    <div className="min-h-screen bg-gray-900 text-white font-['Roboto'] font-mono">
+      {/* Минималистичный хедер */}
+      <header className="bg-black border-b border-gray-700 px-6 py-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-6">
+            <h1 className="text-xl font-bold text-green-400">ГБР СИСТЕМА</h1>
+            <div className="flex items-center space-x-4 text-sm">
+              <span className="text-green-400">{stats.protected} НА ОХРАНЕ</span>
+              <span className="text-red-400">{stats.emergency} ЭКСТРЕННЫХ</span>
+              <span className="text-orange-400">{stats.alarm} ТРЕВОГ</span>
             </div>
-            <div className="flex items-center space-x-4">
-              <div className="text-sm">
-                <span className="font-semibold">Участков на охране: {stats.protected}</span>
-              </div>
-              <div className="text-sm">
-                <span className="font-semibold">Экстренных вызовов: {stats.emergency}</span>
-              </div>
-            </div>
+          </div>
+          
+          {/* Быстрые действия */}
+          <div className="flex items-center space-x-2">
+            <Input
+              type="text"
+              placeholder="№ участка"
+              value={searchId}
+              onChange={(e) => setSearchId(e.target.value)}
+              className="w-24 bg-gray-800 border-gray-600 text-white placeholder-gray-400"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setView(view === 'grid' ? 'compact' : 'grid')}
+              className="border-gray-600 text-gray-300 hover:bg-gray-800"
+            >
+              <Icon name={view === 'grid' ? 'List' : 'Grid3X3'} size={16} />
+            </Button>
           </div>
         </div>
       </header>
 
-      <div className="container mx-auto px-6 py-6">
-        <Tabs defaultValue="monitoring" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
-            <TabsTrigger value="home">Главная</TabsTrigger>
-            <TabsTrigger value="control">Управление участками</TabsTrigger>
-            <TabsTrigger value="monitoring">Мониторинг</TabsTrigger>
-            <TabsTrigger value="alarms">Сигнализация</TabsTrigger>
-            <TabsTrigger value="reports">Отчеты</TabsTrigger>
-            <TabsTrigger value="settings">Настройки</TabsTrigger>
-          </TabsList>
+      {/* Панель массовых действий */}
+      {selectedIds.size > 0 && (
+        <div className="bg-blue-900 px-6 py-2 border-b border-blue-700">
+          <div className="flex items-center justify-between">
+            <span className="text-blue-200">Выбрано: {selectedIds.size}</span>
+            <div className="flex space-x-2">
+              <Button
+                size="sm"
+                onClick={toggleSelectedProtection}
+                className="bg-green-700 hover:bg-green-600 text-xs"
+              >
+                ПЕРЕКЛЮЧИТЬ ОХРАНУ (Ctrl+1)
+              </Button>
+              <Button
+                size="sm"
+                onClick={emergencyCallSelected}
+                className="bg-red-700 hover:bg-red-600 text-xs"
+              >
+                ЭКСТРЕННЫЙ ВЫЗОВ (Ctrl+2)
+              </Button>
+              <Button
+                size="sm"
+                onClick={clearSelectedAlarms}
+                className="bg-orange-700 hover:bg-orange-600 text-xs"
+              >
+                СБРОС ТРЕВОГ (Ctrl+3)
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
-          <TabsContent value="home" className="mt-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg font-semibold text-gray-700">Всего участков</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-3xl font-bold text-[#11E3A8A]">{stats.total}</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg font-semibold text-gray-700">На охране</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-3xl font-bold text-green-600">{stats.protected}</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg font-semibold text-gray-700">Экстренные вызовы</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-3xl font-bold text-red-600">{stats.emergency}</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg font-semibold text-gray-700">Срабатывания</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-3xl font-bold text-orange-600">{stats.alarm}</div>
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
+      {/* Компактный список участков */}
+      <div className="p-4">
 
-          <TabsContent value="control" className="mt-6">
-            <div className="mb-4">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Управление охранными участками</h2>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {properties.map((property) => (
-                <Card 
-                  key={property.id} 
-                  className={`cursor-pointer transition-all duration-200 hover:shadow-md ${getPropertyCardClass(property.status)}`}
-                >
-                  <CardHeader className="pb-3">
-                    <div className="flex justify-between items-start">
-                      <CardTitle className="text-base font-semibold">
-                        Участок #{property.id}
-                      </CardTitle>
-                      {getStatusBadge(property.status)}
-                    </div>
-                    <p className="text-sm text-gray-600">{property.address}</p>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      <p className="text-xs text-gray-500">
-                        Последняя проверка: {property.lastCheck}
-                      </p>
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            className="w-full"
-                            onClick={() => setSelectedProperty(property)}
-                          >
-                            Управление
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>Управление участком #{property.id}</DialogTitle>
-                          </DialogHeader>
-                          <div className="space-y-4">
-                            <div className="text-sm text-gray-600">
-                              <p><strong>Адрес:</strong> {property.address}</p>
-                              <p><strong>Статус:</strong> {getStatusBadge(property.status)}</p>
-                              <p><strong>Последняя проверка:</strong> {property.lastCheck}</p>
-                            </div>
-                            <div className="flex flex-col space-y-2">
-                              <Button
-                                onClick={() => handleProtectionToggle(property.id)}
-                                className={property.status === 'protected' ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}
-                              >
-                                <Icon name={property.status === 'protected' ? 'ShieldOff' : 'Shield'} size={16} className="mr-2" />
-                                {property.status === 'protected' ? 'Снять с охраны' : 'Поставить на охрану'}
-                              </Button>
-                              <Button
-                                onClick={() => handleEmergencyCall(property.id)}
-                                variant="destructive"
-                                className="bg-red-700 hover:bg-red-800"
-                              >
-                                <Icon name="Phone" size={16} className="mr-2" />
-                                Экстренный вызов ГБР
-                              </Button>
-                            </div>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </TabsContent>
-
-          <TabsContent value="monitoring" className="mt-6">
-            <div className="mb-4">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Мониторинг состояния участков</h2>
-            </div>
-            <div className="grid grid-cols-1 gap-2">
-              {properties.map((property) => (
-                <div 
-                  key={property.id} 
-                  className={`p-4 rounded-lg border ${
-                    property.status === 'emergency' ? 'bg-red-100 border-red-300' :
-                    property.status === 'alarm' ? 'bg-orange-100 border-orange-300' :
-                    property.status === 'protected' ? 'bg-green-100 border-green-300' :
-                    'bg-gray-100 border-gray-300'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-4">
-                      <span className="font-semibold text-gray-800">#{property.id}</span>
-                      <span className="text-sm text-gray-600">{property.address}</span>
-                      {getStatusBadge(property.status)}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {property.lastCheck}
-                    </div>
-                  </div>
+        {view === 'compact' ? (
+          <div className="space-y-1">
+            {filteredProperties.map((property) => (
+              <div
+                key={property.id}
+                className={`flex items-center p-3 rounded cursor-pointer transition-colors ${
+                  selectedIds.has(property.id) ? 'bg-blue-800' : 'bg-gray-800 hover:bg-gray-700'
+                } ${property.status === 'emergency' ? 'border-l-4 border-red-500' : ''}
+                ${property.status === 'alarm' ? 'border-l-4 border-orange-500' : ''}`}
+                onClick={() => toggleSelection(property.id)}
+              >
+                <div className="flex items-center space-x-4 flex-1">
+                  <span className="font-bold text-lg w-12">#{property.id}</span>
+                  <div className={`w-3 h-3 rounded-full ${getStatusColor(property.status)}`}></div>
+                  <span className="font-semibold w-20 text-xs">{getStatusText(property.status)}</span>
+                  <span className="text-gray-400 text-sm flex-1">{property.address}</span>
+                  <span className="text-gray-500 text-xs">{property.lastCheck.split(', ')[1]}</span>
                 </div>
-              ))}
-            </div>
-          </TabsContent>
-
-          <TabsContent value="alarms" className="mt-6">
-            <div className="mb-4">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Управление сигнализацией</h2>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {properties.filter(p => p.status === 'protected').map((property) => (
-                <Card key={property.id} className="border-green-200">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base">Участок #{property.id}</CardTitle>
-                    <p className="text-sm text-gray-600">{property.address}</p>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      <Button
-                        onClick={() => triggerAlarm(property.id)}
-                        variant="outline"
-                        size="sm"
-                        className="w-full border-orange-500 text-orange-700 hover:bg-orange-50"
-                      >
-                        <Icon name="Bell" size={16} className="mr-2" />
-                        Тестировать сигнализацию
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-
-            {properties.filter(p => p.status === 'alarm').length > 0 && (
-              <div className="mt-8">
-                <h3 className="text-lg font-semibold text-orange-700 mb-4">Активные срабатывания</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {properties.filter(p => p.status === 'alarm').map((property) => (
-                    <Card key={property.id} className="border-orange-500 bg-orange-50">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-base text-orange-800">Участок #{property.id}</CardTitle>
-                        <p className="text-sm text-orange-600">{property.address}</p>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="space-y-2">
-                          <p className="text-xs text-orange-600">
-                            Сработала: {property.lastCheck}
-                          </p>
-                          <Button
-                            onClick={() => clearAlarm(property.id)}
-                            size="sm"
-                            className="w-full bg-green-600 hover:bg-green-700"
-                          >
-                            <Icon name="CheckCircle" size={16} className="mr-2" />
-                            Отключить сигнализацию
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                
+                {/* Быстрые кнопки */}
+                <div className="flex space-x-1" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleProtectionToggle(property.id)}
+                    className={`w-8 h-8 p-0 ${property.status === 'protected' ? 'text-red-400 hover:bg-red-900' : 'text-green-400 hover:bg-green-900'}`}
+                  >
+                    <Icon name={property.status === 'protected' ? 'ShieldOff' : 'Shield'} size={14} />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleEmergencyCall(property.id)}
+                    className="w-8 h-8 p-0 text-red-400 hover:bg-red-900"
+                  >
+                    <Icon name="Phone" size={14} />
+                  </Button>
+                  {property.status === 'alarm' && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => clearAlarm(property.id)}
+                      className="w-8 h-8 p-0 text-orange-400 hover:bg-orange-900"
+                    >
+                      <Icon name="X" size={14} />
+                    </Button>
+                  )}
                 </div>
               </div>
-            )}
-          </TabsContent>
+            ))}
+          </div>
+        ) : (
+          // Сетка участков
+          <div className="grid grid-cols-8 gap-2">
+            {filteredProperties.map((property) => (
+              <div
+                key={property.id}
+                className={`aspect-square flex flex-col items-center justify-center rounded cursor-pointer transition-all ${
+                  selectedIds.has(property.id) ? 'ring-2 ring-blue-400' : ''
+                } ${getStatusColor(property.status)} ${
+                  property.status === 'emergency' || property.status === 'alarm' ? 'ring-2 ring-white' : ''
+                }`}
+                onClick={() => toggleSelection(property.id)}
+                title={`${property.address} - ${getStatusText(property.status)}`}
+              >
+                <div className="text-white font-bold text-sm">#{property.id}</div>
+                <div className="text-white text-xs text-center px-1">{getStatusText(property.status)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-          <TabsContent value="reports" className="mt-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Отчеты и статистика</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-center py-8 text-gray-500">
-                  <Icon name="FileText" size={48} className="mx-auto mb-4 text-gray-400" />
-                  <p>Раздел отчетов находится в разработке</p>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="settings" className="mt-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Настройки системы</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-center py-8 text-gray-500">
-                  <Icon name="Settings" size={48} className="mx-auto mb-4 text-gray-400" />
-                  <p>Настройки системы находятся в разработке</p>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+      {/* Подсказки горячих клавиш */}
+      <div className="fixed bottom-4 right-4 bg-gray-800 p-3 rounded text-xs text-gray-400">
+        <div>Ctrl+1: Переключить охрану</div>
+        <div>Ctrl+2: Экстренный вызов</div>
+        <div>Ctrl+3: Сброс тревог</div>
+        <div>Ctrl+A: Выбрать все</div>
+        <div>Esc: Сбросить выбор</div>
       </div>
     </div>
   );
